@@ -12,34 +12,40 @@ from aiogram.filters import Command
 import edge_tts
 
 # ←←← ВСТАВЬ СВОЙ ТОКЕН ←←←
-BOT_TOKEN = "8538478896:AAFAD2fPNLXD2Rfhk6VtoDI9cBkaHlCgl5g"
+BOT_TOKEN = "ТОКЕН_ОТ_BOTFATHER"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+URL_PATTERN = re.compile(r'https?://\S+')
 
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
         "Привет! 👋\n\n"
-        "Отправь мне **только цифры** — ID матча Hattrick.\n"
-        "Я дам ссылку и озвучу **полное описание матча** мужским голосом (то, что написано на странице)."
+        "Отправь мне **полную ссылку** на страницу (например, матч Hattrick).\n"
+        "Я отправлю ссылку обратно и озвучу **весь текст этой страницы** мужским голосом."
     )
 
 
-@dp.message(F.text.regexp(r"^\d+$"))
-async def handle_match_id(message: Message):
-    match_id = message.text.strip()
-    url = f"https://www.hattrick.org/Club/Matches/Match.aspx?matchID={match_id}"
+@dp.message(F.text)
+async def handle_url(message: Message):
+    urls = URL_PATTERN.findall(message.text)
+    if not urls:
+        await message.answer("❗ Отправь полную ссылку (начинается с http или https)")
+        return
+
+    url = urls[0]  # берём первую ссылку из сообщения
 
     # Отправляем ссылку
     await message.answer(
-        f"✅ <b>Ссылка на матч:</b>\n"
+        f"✅ <b>Ссылка:</b>\n"
         f"<a href='{url}'>{url}</a>",
         parse_mode="HTML"
     )
 
-    # Загружаем страницу и извлекаем текст
+    # Загружаем страницу
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -50,30 +56,34 @@ async def handle_match_id(message: Message):
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Убираем лишнее (скрипты, стили, меню)
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+        # Убираем всё лишнее
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
             tag.decompose()
 
-        # Берём основной текст страницы
-        main_content = soup.find("div", id="main") or soup.find("div", class_="main") or soup.body
-        report_text = main_content.get_text(separator="\n", strip=True) if main_content else soup.get_text(separator="\n", strip=True)
+        # Берём основной текст
+        main_content = (
+            soup.find("div", id="main") or
+            soup.find("div", class_=re.compile("main|content|report")) or
+            soup.body
+        )
+        page_text = main_content.get_text(separator="\n", strip=True) if main_content else soup.get_text(separator="\n", strip=True)
 
         # Чистим лишние переносы
-        report_text = re.sub(r'\n+', '\n', report_text).strip()
+        page_text = re.sub(r'\n+', '\n', page_text).strip()
 
         # Проверка на требование логина
-        lower_text = report_text.lower()
-        if any(word in lower_text for word in ["log in", "войти", "авториз", "login", "sign in"]):
-            voice_text = "Страница матча требует входа в аккаунт Hattrick. Полный отчёт недоступен без логина. Откройте ссылку в браузере после входа."
+        lower_text = page_text.lower()
+        if any(word in lower_text for word in ["log in", "войти", "авториз", "login", "sign in", "вход"]):
+            voice_text = "Страница требует входа в аккаунт. Полный текст недоступен без логина. Откройте ссылку в браузере после авторизации."
         else:
-            # Ограничиваем длину для удобной озвучки (примерно 4–5 минут речи)
-            if len(report_text) > 5000:
-                report_text = report_text[:5000] + "\n... (полный отчёт слишком длинный, озвучена основная часть)"
-            voice_text = f"Описание матча. {report_text}"
+            # Ограничиваем длину (примерно 4-5 минут речи)
+            if len(page_text) > 5000:
+                page_text = page_text[:5000] + "\n... (страница очень длинная, озвучена основная часть)"
+            voice_text = f"Текст страницы. {page_text}"
 
     except Exception as e:
-        logging.error(f"Ошибка загрузки страницы: {e}")
-        voice_text = f"Не удалось загрузить страницу матча. Откройте ссылку вручную: {url}"
+        logging.error(f"Ошибка загрузки: {e}")
+        voice_text = f"Не удалось загрузить страницу. Попробуйте открыть ссылку вручную."
 
     # Озвучиваем мужским голосом
     try:
@@ -83,19 +93,14 @@ async def handle_match_id(message: Message):
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
 
-        voice_file = BufferedInputFile(audio_data, filename="hattrick_match.mp3")
+        voice_file = BufferedInputFile(audio_data, filename="page_voice.mp3")
         await message.answer_voice(
             voice_file,
-            caption="🎙️ Полное описание матча (мужской голос)"
+            caption="🎙️ Озвучка текста страницы (мужской голос)"
         )
     except Exception as e:
         logging.error(f"TTS error: {e}")
         await message.answer("❌ Ссылка отправлена, но озвучка не получилась.")
-
-
-@dp.message()
-async def any_other(message: Message):
-    await message.answer("❗ Отправь только цифры — ID матча (например: 738853046)")
 
 
 async def main():
