@@ -1,6 +1,2 @@
-aiogram
-requests
-beautifulsoup4
-pyttsx3
-pydub
-gtts  # Опционально
+aiogram==3.13.1
+edge-tts>=6.1.0
