@@ -1,101 +1,75 @@
-import logging
-import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
+import logging
+from io import BytesIO
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, BufferedInputFile
 from aiogram.filters import Command
-from aiogram.types import InputFile
-import requests
-from bs4 import BeautifulSoup
-import pyttsx3
-from pydub import AudioSegment
 
+import edge_tts
 
-from gtts import gTTS  # Добавьте этот импорт в начало файла
+# ←←← ВСТАВЬ СВОЙ ТОКЕН ←←←
+BOT_TOKEN = "ТОКЕН_ОТ_BOTFATHER"
 
-# ... (парсинг текста остается тем же)
-
-# TTS с gTTS (замените pyttsx3 часть)
-tts = gTTS(text, lang='ru')  # 'ru' для русского, мужской голос по умолчанию; для английского - 'en'
-mp3_file = 'output.mp3'
-tts.save(mp3_file)
-
-# Конвертируем в OGG
-ogg_file = 'output.ogg'
-audio = AudioSegment.from_mp3(mp3_file)
-audio.export(ogg_file, format='ogg', codec='libopus')
-
-# Отправляем voice
-await bot.send_voice(message.chat.id, InputFile(ogg_file))
-
-# Удаляем файлы
-os.remove(mp3_file)
-os.remove(ogg_file)
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-
-# Инициализация бота с переменной окружения
-TOKEN = os.getenv('BOT_TOKEN')
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не задан в переменных окружения!")
-
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Обработчик команды /start
-@dp.message(Command('start'))
-async def start(message: types.Message):
-    await message.reply("Привет! Отправь мне URL страницы, и я озвучу её текст мужским голосом.")
 
-# Обработчик текстовых сообщений (ожидаем URL)
-@dp.message()
-async def handle_url(message: types.Message):
-    url = message.text.strip()
-    if not url.startswith('http'):
-        await message.reply("Пожалуйста, отправь valid URL.")
-        return
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.answer(
+        "Привет! 👋\n\n"
+        "Отправь мне **только цифры** — ID матча из Hattrick.\n"
+        "Я дам ссылку на описание матча и озвучу её мужским голосом."
+    )
 
+
+@dp.message(F.text.regexp(r"^\d+$"))  # только цифры
+async def handle_match_id(message: Message):
+    match_id = message.text.strip()
+    url = f"https://www.hattrick.org/Club/Matches/Match.aspx?matchID={match_id}"
+
+    # Текст, который будет озвучен мужским голосом
+    voice_text = (
+        f"Ссылка на описание матча с идентификатором {match_id}. "
+        "Откройте её для просмотра полного отчёта о матче."
+    )
+
+    # Отправляем текстовую ссылку
+    await message.answer(
+        f"✅ <b>Полная ссылка на описание матча:</b>\n"
+        f"<a href='{url}'>{url}</a>",
+        parse_mode="HTML"
+    )
+
+    # Озвучиваем мужским голосом (edge-tts)
     try:
-        # Парсинг текста с сайта
-        response = requests.get(url)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        text = ' '.join(p.get_text() for p in soup.find_all('p'))  # Извлекаем текст из параграфов
-        if not text:
-            await message.reply("Не удалось извлечь текст с страницы.")
-            return
+        communicate = edge_tts.Communicate(voice_text, voice="ru-RU-DmitryNeural")
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
 
-        # Ограничим текст до 1000 символов для теста
-        text = text[:1000]
-
-        # TTS с мужским голосом (pyttsx3)
-        engine = pyttsx3.init()
-        voices = engine.getProperty('voices')
-        engine.setProperty('voice', voices[0].id)  # 0 - обычно мужской
-        engine.setProperty('rate', 150)
-
-        # Сохраняем в WAV
-        wav_file = 'output.wav'
-        engine.save_to_file(text, wav_file)
-        engine.runAndWait()
-
-        # Конвертируем в OGG
-        ogg_file = 'output.ogg'
-        audio = AudioSegment.from_wav(wav_file)
-        audio.export(ogg_file, format='ogg', codec='libopus')
-
-        # Отправляем voice message
-        await bot.send_voice(message.chat.id, InputFile(ogg_file))
-
-        # Удаляем файлы
-        os.remove(wav_file)
-        os.remove(ogg_file)
-
+        voice_file = BufferedInputFile(audio_data, filename="hattrick_match.mp3")
+        await message.answer_voice(
+            voice_file,
+            caption="🎙️ Озвучка ссылки (мужской голос)"
+        )
     except Exception as e:
-        await message.reply(f"Ошибка: {str(e)}")
+        logging.error(f"TTS error: {e}")
+        await message.answer("❌ Не удалось озвучить, но ссылка выше работает.")
 
-# Запуск бота
+
+@dp.message()
+async def any_other(message: Message):
+    await message.answer("❗ Отправь только цифры — ID матча (например: 738853046)")
+
+
 async def main():
+    logging.basicConfig(level=logging.INFO)
+    print("Бот запущен...")
     await dp.start_polling(bot)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     asyncio.run(main())
