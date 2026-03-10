@@ -1,2 +1,4 @@
 aiogram==3.13.1
 edge-tts>=6.1.0
+requests
+beautifulsoup4
