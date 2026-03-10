@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
 
-# ==================== РЕЙТИНГИ (English + Русский) ====================
+# ==================== РЕЙТИНГИ ====================
 rating_base = {
     # English
     "disastrous": 0, "wretched": 1, "poor": 2, "weak": 3, "inadequate": 4,
@@ -40,11 +40,13 @@ def parse_ratings(text: str):
             current_team = "Away"
 
         if current_team and any(x in line for x in ["defence", "attack", "midfield", "защита", "атака", "полузащита"]):
-            m = re.search(r"(left|central|right|midfield|левая|центральная|правая|полузащита).*?:\s*([a-zа-я]+)\s*\((.*?)\)", line, re.I)
+            # Более гибкий regex (работает даже если OCR чуть криво вытащил)
+            m = re.search(r"(left|central|right|midfield|левая|центральная|правая|полузащита)[\s\w]*?:\s*([a-zа-я]+)\s*\(([^)]+)\)", line, re.I)
             if m:
-                sector = m.group(1).strip()
+                sector = m.group(1).strip().lower()
                 base = m.group(2).strip()
                 sub = m.group(3).strip().lower()
+
                 if base in rating_base and sub in sub_map:
                     value = rating_base[base] + sub_map[sub]
                     sector_norm = {
@@ -52,10 +54,11 @@ def parse_ratings(text: str):
                         "midfield": "MF", "left attack": "LA", "central attack": "CA", "right attack": "RA",
                         "левая защита": "LD", "центральная защита": "CD", "правая защита": "RD",
                         "полузащита": "MF", "левая атака": "LA", "центральная атака": "CA", "правая атака": "RA"
-                    }.get(sector.lower(), sector[:2].upper())
+                    }.get(sector, sector[:2].upper())
                     teams[current_team][sector_norm] = value
 
     return teams["Home"], teams["Away"]
+
 
 # ==================== РАСЧЁТ ====================
 def calculate_xg(team1, team2):
@@ -75,6 +78,7 @@ def calculate_xg(team1, team2):
 
     return round(chances1 * p1, 2), round(chances2 * p2, 2)
 
+
 def poisson_win_prob(lam1, lam2):
     p1_win = p_draw = p2_win = 0.0
     for g1 in range(13):
@@ -87,25 +91,61 @@ def poisson_win_prob(lam1, lam2):
             else: p2_win += prob
     return round(p1_win * 100, 1), round(p_draw * 100, 1), round(p2_win * 100, 1)
 
+
+# ==================== ОБРАБОТКА РЕЙТИНГОВ ====================
+async def process_ratings(raw_text: str, message: Message):
+    try:
+        home, away = parse_ratings(raw_text)
+        if not home or not away or len(home) < 3:
+            raise ValueError("Не хватило данных")
+
+        xg_home, xg_away = calculate_xg(home, away)
+        win_h, draw, win_a = poisson_win_prob(xg_home, xg_away)
+
+        result = f"""🔥 **Анализ матча**
+
+**xG Home:** {xg_home} | **xG Away:** {xg_away}
+
+🏆 **Вероятности:**
+✅ Home — **{win_h}%**
+🤝 Ничья — **{draw}%**
+❌ Away — **{win_a}%**
+
+{'🏆 Home — явный фаворит!' if win_h > 65 else '🏆 Away — фаворит!' if win_a > 65 else '🤝 Матч равный'}"""
+        
+        await message.reply(result, parse_mode="Markdown")
+    except Exception:
+        await message.reply(
+            "⚠️ Не удалось распарсить рейтинги.\n\n"
+            "• Пришли **скриншот** блока Ratings\n"
+            "• Или **скопируй текст** от слова `Ratings` до `Possession` и пришли мне"
+        )
+
+
 # ==================== БОТ ====================
 token = getenv("BOT_TOKEN")
 bot = Bot(token=token)
 dp = Dispatcher()
 
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.reply(
-        "👋 Кидай ссылку на матч или **скриншот** блока Ratings.\n"
-        "Если OCR не сработает (bothost.ru не поддерживает Tesseract) — просто пришли текст рейтингов."
+        "👋 Привет! Кидай:\n"
+        "• **скриншот** блока Ratings\n"
+        "• или просто **скопируй текст** от `Ratings` до `Possession`\n\n"
+        "Я посчитаю xG и вероятности победы мгновенно!"
     )
+
 
 @dp.message(F.text)
 async def handle_text(message: Message):
     text = message.text.strip()
     if re.search(r"matchID=(\d+)", text, re.I):
-        await message.reply("✅ MatchID найден! Пришли скриншот Ratings или текст вручную.")
+        await message.reply("✅ MatchID найден! Пришли скриншот или текст рейтингов.")
         return
-    await message.reply("❌ Пришли ссылку или скриншот.")
+    await process_ratings(text, message)
+
 
 @dp.message(F.photo)
 async def handle_photo(message: Message):
@@ -120,42 +160,23 @@ async def handle_photo(message: Message):
             image = image.filter(ImageFilter.MEDIAN_FILTER)
             image = ImageEnhance.Contrast(image).enhance(2.5)
             image = ImageEnhance.Sharpness(image).enhance(2.0)
-
             config = r'--oem 3 --psm 6'
-            # Пробуем английский + русский
             return pytesseract.image_to_string(image, config=config, lang='eng+rus')
 
         raw_text = await asyncio.to_thread(ocr_process, file_bytes)
-        home, away = parse_ratings(raw_text)
+        await process_ratings(raw_text, message)
 
-        if not home or not away or len(home) < 3:
-            raise ValueError("Не распарсил рейтинги")
-
-        xg_home, xg_away = calculate_xg(home, away)
-        win_h, draw, win_a = poisson_win_prob(xg_home, xg_away)
-
-        result = f"""🔥 **Анализ по скриншоту**
-
-xG Home: **{xg_home}** | xG Away: **{xg_away}**
-
-🏆 **Вероятности:**
-✅ Home ближе к победе — **{win_h}%**
-🤝 Ничья — **{draw}%**
-❌ Away ближе к поражению — **{win_a}%**
-
-{'🏆 Home был явным фаворитом!' if win_h > 65 else '🏆 Away был фаворитом!' if win_a > 65 else '🤝 Матч равный'}"""
-        
-        await message.reply(result, parse_mode="Markdown")
-
-    except Exception as e:
+    except Exception:
         await message.reply(
             "⚠️ OCR не сработал (bothost.ru не поддерживает Tesseract).\n\n"
-            "Просто **скопируй текст** из матча (от слова Ratings до Possession) и пришли мне — посчитаю мгновенно!"
+            "Просто **скопируй текст** от слова `Ratings` до `Possession` и пришли мне — посчитаю мгновенно!"
         )
 
+
 async def main():
-    print("🤖 Бот запущен на bothost.ru")
+    print("🤖 Бот запущен на bothost.ru (исправленная версия)")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
