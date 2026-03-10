@@ -9,6 +9,27 @@ from bs4 import BeautifulSoup
 import pyttsx3
 from pydub import AudioSegment
 
+
+from gtts import gTTS  # Добавьте этот импорт в начало файла
+
+# ... (парсинг текста остается тем же)
+
+# TTS с gTTS (замените pyttsx3 часть)
+tts = gTTS(text, lang='ru')  # 'ru' для русского, мужской голос по умолчанию; для английского - 'en'
+mp3_file = 'output.mp3'
+tts.save(mp3_file)
+
+# Конвертируем в OGG
+ogg_file = 'output.ogg'
+audio = AudioSegment.from_mp3(mp3_file)
+audio.export(ogg_file, format='ogg', codec='libopus')
+
+# Отправляем voice
+await bot.send_voice(message.chat.id, InputFile(ogg_file))
+
+# Удаляем файлы
+os.remove(mp3_file)
+os.remove(ogg_file)
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
