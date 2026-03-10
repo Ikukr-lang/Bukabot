@@ -9,7 +9,7 @@ from aiogram.filters import Command
 import edge_tts
 
 # ←←← ВСТАВЬ СВОЙ ТОКЕН ←←←
-BOT_TOKEN = "ТОКЕН_ОТ_BOTFATHER"
+BOT_TOKEN = "8538478896:AAFAD2fPNLXD2Rfhk6VtoDI9cBkaHlCgl5g"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
