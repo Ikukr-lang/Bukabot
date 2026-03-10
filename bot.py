@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+import os  # Добавлено для env
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,9 +9,12 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-# Токены (замените на свои)
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-PAYMENTS_TOKEN = "YOUR_PAYMENTS_TOKEN_HERE"  # Тестовый токен из BotFather
+# Токены из env (установите на Bothost.ru)
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+PAYMENTS_TOKEN = os.environ.get('PAYMENTS_TOKEN')  # Если нет, бот запустится без платежей
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -99,65 +103,3 @@ async def place_bet(message: types.Message, state: FSMContext):
             return
         cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, user_id))
         cursor.execute("INSERT INTO bets (user_id, event, amount, odds, status) VALUES (?, ?, ?, ?, ?)",
-                       (user_id, f"{data['event']} - {data['outcome']}", amount, data['odds'], "В ожидании"))
-        conn.commit()
-        await message.answer(f"Ставка размещена: {amount} на {data['outcome']} с коэф. {data['odds']}")
-    except ValueError:
-        await message.answer("Введите число!")
-    await state.clear()
-
-# Мои ставки
-@dp.message(lambda message: message.text == "Мои ставки")
-async def my_bets(message: types.Message):
-    user_id = message.from_user.id
-    cursor.execute("SELECT event, amount, odds, status FROM bets WHERE user_id=?", (user_id,))
-    bets = cursor.fetchall()
-    if not bets:
-        await message.answer("У вас нет ставок.")
-        return
-    response = "Ваши ставки:\n"
-    for bet in bets:
-        response += f"{bet[0]} - {bet[1]} руб. (коэф. {bet[2]}) - {bet[3]}\n"
-    await message.answer(response)
-
-# Баланс
-@dp.message(lambda message: message.text == "Баланс")
-async def balance(message: types.Message):
-    user_id = message.from_user.id
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    bal = cursor.fetchone()[0]
-    await message.answer(f"Ваш баланс: {bal} руб.")
-
-# Пополнение (тестовые платежи)
-@dp.message(lambda message: message.text == "Пополнить")
-async def top_up(message: types.Message):
-    prices = [types.LabeledPrice(label='Пополнение на 100 руб.', amount=10000)]  # в копейках
-    await bot.send_invoice(
-        chat_id=message.chat.id,
-        title='Пополнение баланса',
-        description='Тестовое пополнение',
-        payload='topup_100',
-        provider_token=PAYMENTS_TOKEN,
-        currency='RUB',
-        prices=prices
-    )
-
-# Обработка успешного платежа
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-@dp.message(lambda message: message.successful_payment)
-async def successful_payment(message: types.Message):
-    user_id = message.from_user.id
-    amount = message.successful_payment.total_amount / 100  # в рублях
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-    conn.commit()
-    await message.answer(f"Баланс пополнен на {amount} руб.")
-
-# Запуск бота
-async def main():
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
