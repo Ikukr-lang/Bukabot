@@ -89,6 +89,9 @@ def poisson_win_prob(lam1, lam2):
 
 # ==================== БОТ ====================
 token = getenv("BOT_TOKEN")
+if not token:
+    raise ValueError("BOT_TOKEN не найден в переменных окружения!")
+
 bot = Bot(token=token)
 dp = Dispatcher()
 
@@ -96,7 +99,7 @@ dp = Dispatcher()
 async def cmd_start(message: Message):
     await message.reply(
         "👋 Кидай ссылку на матч или **скриншот** блока Ratings.\n"
-        "Если OCR не сработает — просто пришли текст рейтингов."
+        "OCR теперь работает через Docker — просто отправляй скриншот!"
     )
 
 @dp.message(F.text)
@@ -122,7 +125,7 @@ async def handle_photo(message: Message):
             image = ImageEnhance.Sharpness(image).enhance(2.0)
 
             config = r'--oem 3 --psm 6'
-            # Пробуем английский + русский
+            # Английский + Русский (установлены в Docker)
             return pytesseract.image_to_string(image, config=config, lang='eng+rus')
 
         raw_text = await asyncio.to_thread(ocr_process, file_bytes)
@@ -149,13 +152,12 @@ xG Home: **{xg_home}** | xG Away: **{xg_away}**
 
     except Exception as e:
         await message.reply(
-            "⚠️ OCR не сработал.\n\n"
-            "Просто **скопируй текст** из матча (от слова Ratings до Possession) "
-            "и пришли мне — посчитаю мгновенно!"
+            "⚠️ OCR не смог прочитать текст.\n\n"
+            "Просто **скопируй текст** из матча (от слова Ratings до Possession) и пришли мне — посчитаю мгновенно!"
         )
 
 async def main():
-    print("🤖 Бот запущен с Tesseract OCR")
+    print("🤖 Бот успешно запущен в Docker")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
