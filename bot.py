@@ -12,13 +12,11 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
 
-# ==================== РЕЙТИНГИ (English + Русский) ====================
+# ==================== РЕЙТИНГИ ====================
 rating_base = {
-    # English
     "disastrous": 0, "wretched": 1, "poor": 2, "weak": 3, "inadequate": 4,
     "passable": 5, "solid": 6, "excellent": 7, "formidable": 8, "outstanding": 9,
     "brilliant": 10, "magnificent": 11, "utopian": 12, "divine": 13,
-    # Русский
     "катастрофический": 0, "убогий": 1, "плохой": 2, "слабый": 3, "недостаточный": 4,
     "приемлемый": 5, "солидный": 6, "отличный": 7, "грозный": 8, "выдающийся": 9,
     "блестящий": 10, "великолепный": 11, "утопический": 12, "божественный": 13,
@@ -32,8 +30,9 @@ sub_map = {
 def parse_ratings(text: str):
     teams = {"Home": {}, "Away": {}}
     current_team = None
+    lines = text.lower().splitlines()
 
-    for line in text.lower().splitlines():
+    for line in lines:
         line = line.strip()
         if "home" in line or "ваша команда" in line:
             current_team = "Home"
@@ -41,7 +40,8 @@ def parse_ratings(text: str):
             current_team = "Away"
 
         if current_team and any(x in line for x in ["defence", "attack", "midfield", "защита", "атака", "полузащита"]):
-            m = re.search(r"(left|central|right|midfield|левая|центральная|правая|полузащита).*?:\s*([a-zа-я]+)\s*\((.*?)\)", line, re.I)
+            # Более мягкий regex (учитывает лишние символы и пробелы)
+            m = re.search(r"(left|central|right|midfield|левая|центральная|правая|полузащита)[\s:]+([a-zа-я]+)[\s(]+(very low|low|high|very high|очень низкий|низкий|высокий|очень высокий)", line, re.I)
             if m:
                 sector = m.group(1).strip()
                 base = m.group(2).strip()
@@ -58,7 +58,7 @@ def parse_ratings(text: str):
 
     return teams["Home"], teams["Away"]
 
-# ==================== РАСЧЁТ ====================
+# ==================== РАСЧЁТ (без изменений) ====================
 def calculate_xg(team1, team2):
     mf1 = team1.get("MF", 7.0)
     mf2 = team2.get("MF", 7.0)
@@ -88,55 +88,62 @@ def poisson_win_prob(lam1, lam2):
             else: p2_win += prob
     return round(p1_win * 100, 1), round(p_draw * 100, 1), round(p2_win * 100, 1)
 
-# ==================== EasyOCR (глобальный reader) ====================
+# ==================== EasyOCR (улучшенный) ====================
 reader = easyocr.Reader(['en', 'ru'], gpu=False, download_enabled=True)
 
 # ==================== БОТ ====================
 token = getenv("BOT_TOKEN")
 if not token:
-    raise ValueError("BOT_TOKEN не найден в переменных окружения!")
+    raise ValueError("BOT_TOKEN не найден!")
 
 bot = Bot(token=token)
 dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.reply(
-        "👋 Кидай **скриншот** блока Ratings.\n"
-        "Теперь работает EasyOCR — точность на русском и английском на высоте!"
-    )
+    await message.reply("👋 Отправь скриншот блока **Ratings** — теперь с улучшенным EasyOCR + отладкой!")
 
 @dp.message(F.text)
 async def handle_text(message: Message):
-    text = message.text.strip()
-    if re.search(r"matchID=(\d+)", text, re.I):
-        await message.reply("✅ MatchID найден! Пришли скриншот Ratings.")
-        return
     await message.reply("❌ Пришли скриншот Ratings.")
 
 @dp.message(F.photo)
 async def handle_photo(message: Message):
-    await message.reply("📸 Получил скриншот! Читаю **EasyOCR**...")
+    await message.reply("📸 Читаю улучшенным EasyOCR...")
 
     try:
         file = await bot.get_file(message.photo[-1].file_id)
         file_bytes = await bot.download_file(file.file_path)
 
         def ocr_process(data):
+            # Улучшенная предобработка
             image = Image.open(io.BytesIO(data)).convert('RGB')
-            image = image.filter(ImageFilter.MEDIAN_FILTER)
-            image = ImageEnhance.Contrast(image).enhance(2.5)
-            image = ImageEnhance.Sharpness(image).enhance(2.0)
+            w, h = image.size
+            if w > 1800:  # ресайз больших скринов
+                ratio = 1800 / w
+                image = image.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
 
-            # EasyOCR — лучшая точность для скриншотов
-            result = reader.readtext(np.array(image), detail=0, paragraph=True)
-            return '\n'.join(result)
+            image = ImageEnhance.Contrast(image).enhance(3.5)
+            image = ImageEnhance.Sharpness(image).enhance(2.5)
+            image = image.filter(ImageFilter.MEDIAN_FILTER)
+
+            # EasyOCR с фильтром уверенности
+            result = reader.readtext(
+                np.array(image),
+                detail=1,
+                paragraph=False,
+                width_ths=0.7,
+                height_ths=0.7
+            )
+            # Берём только уверенные строки
+            lines = [text for (_, text, conf) in result if conf > 0.4]
+            return '\n'.join(lines)
 
         raw_text = await asyncio.to_thread(ocr_process, file_bytes)
         home, away = parse_ratings(raw_text)
 
-        if not home or not away or len(home) < 3:
-            raise ValueError("Не распарсил рейтинги")
+        if len(home) < 3 or len(away) < 3:
+            raise ValueError("Мало данных")
 
         xg_home, xg_away = calculate_xg(home, away)
         win_h, draw, win_a = poisson_win_prob(xg_home, xg_away)
@@ -146,22 +153,24 @@ async def handle_photo(message: Message):
 xG Home: **{xg_home}** | xG Away: **{xg_away}**
 
 🏆 **Вероятности:**
-✅ Home ближе к победе — **{win_h}%**
+✅ Home — **{win_h}%**
 🤝 Ничья — **{draw}%**
-❌ Away ближе к поражению — **{win_a}%**
+❌ Away — **{win_a}%**
 
-{'🏆 Home был явным фаворитом!' if win_h > 65 else '🏆 Away был фаворитом!' if win_a > 65 else '🤝 Матч равный'}"""
+{'🏆 Home явный фаворит!' if win_h > 65 else '🏆 Away фаворит!' if win_a > 65 else '🤝 Матч равный'}"""
         
         await message.reply(result, parse_mode="Markdown")
 
     except Exception as e:
         await message.reply(
-            "⚠️ EasyOCR не смог прочитать текст идеально.\n\n"
-            "Просто **скопируй текст** из матча (от слова Ratings до Possession) и пришли мне — посчитаю мгновенно!"
+            f"⚠️ OCR не смог распарсить рейтинги.\n\n"
+            f"**Raw текст, который увидел OCR:**\n```\n{raw_text}\n```\n\n"
+            "Скопируй этот блок и пришли мне — подправим парсер за 1 минуту!\n"
+            "Или попробуй другой скриншот."
         )
 
 async def main():
-    print("🤖 Бот запущен с EasyOCR (модели загружены)")
+    print("🤖 Бот запущен с улучшенным EasyOCR + отладкой")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
