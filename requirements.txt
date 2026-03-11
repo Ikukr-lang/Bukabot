@@ -1,3 +1,4 @@
 aiogram
 Pillow
-pytesseract
+easyocr
+numpy
