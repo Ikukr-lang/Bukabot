@@ -5,7 +5,8 @@ import math
 from os import getenv
 
 from PIL import Image, ImageEnhance, ImageFilter
-import pytesseract
+import easyocr
+import numpy as np
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
@@ -87,6 +88,9 @@ def poisson_win_prob(lam1, lam2):
             else: p2_win += prob
     return round(p1_win * 100, 1), round(p_draw * 100, 1), round(p2_win * 100, 1)
 
+# ==================== EasyOCR (глобальный reader) ====================
+reader = easyocr.Reader(['en', 'ru'], gpu=False, download_enabled=True)
+
 # ==================== БОТ ====================
 token = getenv("BOT_TOKEN")
 if not token:
@@ -98,35 +102,35 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.reply(
-        "👋 Кидай ссылку на матч или **скриншот** блока Ratings.\n"
-        "OCR теперь работает через Docker — просто отправляй скриншот!"
+        "👋 Кидай **скриншот** блока Ratings.\n"
+        "Теперь работает EasyOCR — точность на русском и английском на высоте!"
     )
 
 @dp.message(F.text)
 async def handle_text(message: Message):
     text = message.text.strip()
     if re.search(r"matchID=(\d+)", text, re.I):
-        await message.reply("✅ MatchID найден! Пришли скриншот Ratings или текст вручную.")
+        await message.reply("✅ MatchID найден! Пришли скриншот Ratings.")
         return
-    await message.reply("❌ Пришли ссылку или скриншот.")
+    await message.reply("❌ Пришли скриншот Ratings.")
 
 @dp.message(F.photo)
 async def handle_photo(message: Message):
-    await message.reply("📸 Получил скриншот! Читаю OCR...")
+    await message.reply("📸 Получил скриншот! Читаю **EasyOCR**...")
 
     try:
         file = await bot.get_file(message.photo[-1].file_id)
         file_bytes = await bot.download_file(file.file_path)
 
         def ocr_process(data):
-            image = Image.open(io.BytesIO(data)).convert('L')
+            image = Image.open(io.BytesIO(data)).convert('RGB')
             image = image.filter(ImageFilter.MEDIAN_FILTER)
             image = ImageEnhance.Contrast(image).enhance(2.5)
             image = ImageEnhance.Sharpness(image).enhance(2.0)
 
-            config = r'--oem 3 --psm 6'
-            # Английский + Русский (установлены в Docker)
-            return pytesseract.image_to_string(image, config=config, lang='eng+rus')
+            # EasyOCR — лучшая точность для скриншотов
+            result = reader.readtext(np.array(image), detail=0, paragraph=True)
+            return '\n'.join(result)
 
         raw_text = await asyncio.to_thread(ocr_process, file_bytes)
         home, away = parse_ratings(raw_text)
@@ -152,12 +156,12 @@ xG Home: **{xg_home}** | xG Away: **{xg_away}**
 
     except Exception as e:
         await message.reply(
-            "⚠️ OCR не смог прочитать текст.\n\n"
+            "⚠️ EasyOCR не смог прочитать текст идеально.\n\n"
             "Просто **скопируй текст** из матча (от слова Ratings до Possession) и пришли мне — посчитаю мгновенно!"
         )
 
 async def main():
-    print("🤖 Бот успешно запущен в Docker")
+    print("🤖 Бот запущен с EasyOCR (модели загружены)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
