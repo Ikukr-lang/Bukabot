@@ -3,10 +3,16 @@
 FROM python:3.12-slim
 
 # Устанавливаем только нужные пакеты
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+Можно выбрав собственный dockerfile. 
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-rus \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+    
 WORKDIR /app
 
 # Копируем файлы
