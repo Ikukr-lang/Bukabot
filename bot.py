@@ -11,45 +11,51 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
 
-# ==================== ОБНОВЛЁННЫЙ ПАРСЕР ДЛЯ HATTRICK.ORG ====================
+# ==================== РЕЙТИНГИ (English + Русский) ====================
+rating_base = {
+    # English
+    "disastrous": 0, "wretched": 1, "poor": 2, "weak": 3, "inadequate": 4,
+    "passable": 5, "solid": 6, "excellent": 7, "formidable": 8, "outstanding": 9,
+    "brilliant": 10, "magnificent": 11, "utopian": 12, "divine": 13,
+    # Русский
+    "катастрофический": 0, "убогий": 1, "плохой": 2, "слабый": 3, "недостаточный": 4,
+    "приемлемый": 5, "солидный": 6, "отличный": 7, "грозный": 8, "выдающийся": 9,
+    "блестящий": 10, "великолепный": 11, "утопический": 12, "божественный": 13,
+}
+
+sub_map = {
+    "very low": 0.0, "low": 0.25, "high": 0.50, "very high": 0.75,
+    "очень низкий": 0.0, "низкий": 0.25, "высокий": 0.50, "очень высокий": 0.75,
+}
+
 def parse_ratings(text: str):
     teams = {"Home": {}, "Away": {}}
+    current_team = None
 
-    sector_map = {
-        "midfield": "MF",
-        "right defense": "RD", "right defence": "RD",
-        "central defense": "CD", "central defence": "CD",
-        "left defense": "LD", "left defence": "LD",
-        "right attack": "RA",
-        "central attack": "CA",
-        "left attack": "LA",
-    }
-
-    for line in text.splitlines():
+    for line in text.lower().splitlines():
         line = line.strip()
-        if not line or any(skip in line.lower() for skip in ["rating details", "indirect set pieces", "match plan"]):
-            continue
+        if "home" in line or "ваша команда" in line:
+            current_team = "Home"
+        elif "away" in line or "соперник" in line:
+            current_team = "Away"
 
-        # Ищем название сектора + два числа (Home и Away)
-        match = re.search(
-            r'(midfield|right\s+defen[cs]e|central\s+defen[cs]e|left\s+defen[cs]e|right\s+attack|central\s+attack|left\s+attack)'
-            r'.*?(\d+[.,]\d{2}).*?(\d+[.,]\d{2})',
-            line,
-            re.IGNORECASE
-        )
-        if match:
-            sector_raw = match.group(1).strip().lower()
-            try:
-                val_home = float(match.group(2).replace(',', '.'))
-                val_away = float(match.group(3).replace(',', '.'))
-                sector_norm = sector_map.get(sector_raw, sector_raw[:2].upper())
-                teams["Home"][sector_norm] = val_home
-                teams["Away"][sector_norm] = val_away
-            except ValueError:
-                continue
+        if current_team and any(x in line for x in ["defence", "attack", "midfield", "защита", "атака", "полузащита"]):
+            m = re.search(r"(left|central|right|midfield|левая|центральная|правая|полузащита).*?:\s*([a-zа-я]+)\s*\((.*?)\)", line, re.I)
+            if m:
+                sector = m.group(1).strip()
+                base = m.group(2).strip()
+                sub = m.group(3).strip().lower()
+                if base in rating_base and sub in sub_map:
+                    value = rating_base[base] + sub_map[sub]
+                    sector_norm = {
+                        "left defence": "LD", "central defence": "CD", "right defence": "RD",
+                        "midfield": "MF", "left attack": "LA", "central attack": "CA", "right attack": "RA",
+                        "левая защита": "LD", "центральная защита": "CD", "правая защита": "RD",
+                        "полузащита": "MF", "левая атака": "LA", "центральная атака": "CA", "правая атака": "RA"
+                    }.get(sector.lower(), sector[:2].upper())
+                    teams[current_team][sector_norm] = value
 
     return teams["Home"], teams["Away"]
-
 
 # ==================== РАСЧЁТ ====================
 def calculate_xg(team1, team2):
@@ -69,7 +75,6 @@ def calculate_xg(team1, team2):
 
     return round(chances1 * p1, 2), round(chances2 * p2, 2)
 
-
 def poisson_win_prob(lam1, lam2):
     p1_win = p_draw = p2_win = 0.0
     for g1 in range(13):
@@ -82,29 +87,25 @@ def poisson_win_prob(lam1, lam2):
             else: p2_win += prob
     return round(p1_win * 100, 1), round(p_draw * 100, 1), round(p2_win * 100, 1)
 
-
 # ==================== БОТ ====================
 token = getenv("BOT_TOKEN")
 bot = Bot(token=token)
 dp = Dispatcher()
 
-
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.reply(
         "👋 Кидай ссылку на матч или **скриншот** блока Ratings.\n"
-        "Теперь бот идеально читает hattrick.org (новые рейтинги titanic/supernatural и т.д.)!"
+        "Если OCR не сработает — просто пришли текст рейтингов."
     )
-
 
 @dp.message(F.text)
 async def handle_text(message: Message):
     text = message.text.strip()
     if re.search(r"matchID=(\d+)", text, re.I):
-        await message.reply("✅ MatchID найден! Пришли скриншот Ratings.")
+        await message.reply("✅ MatchID найден! Пришли скриншот Ratings или текст вручную.")
         return
     await message.reply("❌ Пришли ссылку или скриншот.")
-
 
 @dp.message(F.photo)
 async def handle_photo(message: Message):
@@ -121,6 +122,7 @@ async def handle_photo(message: Message):
             image = ImageEnhance.Sharpness(image).enhance(2.0)
 
             config = r'--oem 3 --psm 6'
+            # Пробуем английский + русский
             return pytesseract.image_to_string(image, config=config, lang='eng+rus')
 
         raw_text = await asyncio.to_thread(ocr_process, file_bytes)
@@ -148,14 +150,13 @@ xG Home: **{xg_home}** | xG Away: **{xg_away}**
     except Exception as e:
         await message.reply(
             "⚠️ OCR не сработал.\n\n"
-            "Просто **скопируй текст** из матча (от слова Ratings до Possession) и пришли мне — посчитаю мгновенно!"
+            "Просто **скопируй текст** из матча (от слова Ratings до Possession) "
+            "и пришли мне — посчитаю мгновенно!"
         )
 
-
 async def main():
-    print("🤖 Бот запущен (обновлённый парсер hattrick.org)")
+    print("🤖 Бот запущен с Tesseract OCR")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
