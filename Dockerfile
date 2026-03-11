@@ -1,32 +1,24 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
-# ==================== УСТАНОВКА TESSERACT (eng + rus) ====================
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# === УСТАНОВКА TESSERACT OCR + ЯЗЫКИ (eng + rus) ===
+RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     tesseract-ocr-rus \
-    && apt-get clean \
+    libjpeg62-turbo \
+    libpng16-16 \
     && rm -rf /var/lib/apt/lists/*
 
-# ==================== РАБОЧАЯ ДИРЕКТОРИЯ ====================
 WORKDIR /app
 
-# ==================== PYTHON ЗАВИСИМОСТИ ====================
-# Можно через requirements.txt, а можно сразу:
-RUN pip install --no-cache-dir \
-    aiogram \
-    pillow \
-    pytesseract
+# Устанавливаем Python-зависимости
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# ==================== КОД БОТА ====================
-# Переименовываем файл (пробел в имени — плохо для Docker)
-COPY "bot.py" bot.py
+# Копируем код бота
+# Если файл называется "bot 2.py" — оставь как есть
+# Лучше переименуй в bot.py для удобства
+COPY bot.py .
 
-# Если хочешь использовать requirements.txt:
-# COPY requirements.txt .
-# RUN pip install --no-cache-dir -r requirements.txt
-# COPY "bot 2.py" bot.py
-
-# ==================== ЗАПУСК ====================
+# Запуск бота
 CMD ["python", "bot.py"]
