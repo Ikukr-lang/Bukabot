@@ -1,10 +1,6 @@
-# ==================== Dockerfile для Hattrick xG-бота ====================
-
 FROM python:3.12-slim
 
-# Устанавливаем только нужные пакеты
-Можно выбрав собственный dockerfile. 
-
+# ==================== УСТАНОВКА TESSERACT (eng + rus) ====================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     tesseract-ocr \
@@ -12,18 +8,25 @@ RUN apt-get update && \
     tesseract-ocr-rus \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-    
+
+# ==================== РАБОЧАЯ ДИРЕКТОРИЯ ====================
 WORKDIR /app
 
-# Копируем файлы
-COPY bot\ 2.py bot.py
-COPY requirements.txt .
+# ==================== PYTHON ЗАВИСИМОСТИ ====================
+# Можно через requirements.txt, а можно сразу:
+RUN pip install --no-cache-dir \
+    aiogram \
+    pillow \
+    pytesseract
 
-# Устанавливаем зависимости
-RUN pip install --no-cache-dir -r requirements.txt
+# ==================== КОД БОТА ====================
+# Переименовываем файл (пробел в имени — плохо для Docker)
+COPY "bot.py" bot.py
 
-# Переменная окружения для токена (можно задать при запуске)
-ENV BOT_TOKEN=""
+# Если хочешь использовать requirements.txt:
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir -r requirements.txt
+# COPY "bot 2.py" bot.py
 
-# Запуск бота
+# ==================== ЗАПУСК ====================
 CMD ["python", "bot.py"]
